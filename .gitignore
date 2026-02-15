@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.env
+evidencias/
+*.png
+!graph.png
+.venv/
+venv/
