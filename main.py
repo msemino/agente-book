@@ -11,8 +11,15 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
 from datetime import datetime, timedelta
+
+# Fix Windows console encoding para emojis de browser-use logs
+if sys.platform == "win32":
+    os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 from config import ALBARELLOS_URL
 from graph import build_graph, get_graph_image

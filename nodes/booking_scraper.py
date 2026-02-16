@@ -1,26 +1,35 @@
-"""Nodo del grafo: scraper de precios en Booking.com usando browser-use."""
+"""Nodo del grafo: scraper de precios en Booking.com con Playwright directo.
+
+Sin LLM. Navega, espera, parsea HTML con selectores CSS, extrae precios.
+~5 segundos por consulta.
+"""
 
 from __future__ import annotations
 
-import base64
+import re
 from datetime import datetime
-from pathlib import Path
 
-from browser_use import Agent, BrowserProfile, BrowserSession, ChatOllama
+from playwright.async_api import async_playwright
 
-from config import EVIDENCIAS_DIR, HEADLESS, MAX_STEPS, OLLAMA_HOST, OLLAMA_MODEL
+from config import EVIDENCIAS_DIR, HEADLESS
 from state import BookingResult, GraphState
+
+# User-Agent realista para evitar bloqueos básicos
+_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/120.0.0.0 Safari/537.36"
+)
 
 
 async def booking_scraper_node(state: GraphState) -> GraphState:
-    """Nodo LangGraph: abre Booking, busca precio del hotel, devuelve resultado."""
+    """Nodo LangGraph: abre Booking, extrae precio con selectores CSS."""
 
     check_in = state["check_in"]
     check_out = state["check_out"]
     guests = state.get("guests", 2)
     hotel_url = state["hotel_url"]
 
-    # Formatear fechas para la URL de Booking
     cin = datetime.strptime(check_in, "%d/%m/%Y").strftime("%Y-%m-%d")
     cout = datetime.strptime(check_out, "%d/%m/%Y").strftime("%Y-%m-%d")
     target_url = (
@@ -29,71 +38,89 @@ async def booking_scraper_node(state: GraphState) -> GraphState:
     )
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-    # LLM local con Ollama en tu RTX 3090
-    llm = ChatOllama(model=OLLAMA_MODEL, host=OLLAMA_HOST)
-
-    # Browser con perfil limpio
-    profile = BrowserProfile(headless=HEADLESS)
-    browser = BrowserSession(browser_profile=profile)
-
-    task = (
-        f"Navegá a esta URL exacta: {target_url}\n"
-        f"Esperá a que cargue la página del hotel.\n"
-        f"Buscá el precio por noche para las fechas seleccionadas.\n"
-        f"Si ves un precio, reportá status AVAILABLE y el precio.\n"
-        f"Si dice que no hay disponibilidad, reportá status OCCUPIED.\n"
-        f"Si aparece un CAPTCHA, reportá status CAPTCHA.\n"
-        f"Si hay cualquier otro error, reportá status ERROR."
-    )
-
-    agent = Agent(
-        task=task,
-        llm=llm,
-        browser_session=browser,
-        use_vision=True,
-        output_model_schema=BookingResult,
-    )
-
     screenshot_path: str | None = None
     result: BookingResult | None = None
     error: str | None = None
 
-    try:
-        history = await agent.run(max_steps=MAX_STEPS)
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=HEADLESS)
+        ctx = await browser.new_context(
+            user_agent=_UA,
+            viewport={"width": 1366, "height": 768},
+            locale="es-AR",
+        )
+        page = await ctx.new_page()
 
-        # Extraer resultado estructurado
-        result = history.get_structured_output(BookingResult)
-        if result is None:
-            # Intentar desde final_result como fallback
-            final = history.final_result()
-            if final:
-                try:
-                    result = BookingResult.model_validate_json(final)
-                except Exception:
-                    result = BookingResult(status="ERROR")
-                    error = f"No se pudo parsear respuesta: {final[:200]}"
+        try:
+            await page.goto(target_url, wait_until="domcontentloaded", timeout=30000)
+            await page.wait_for_timeout(6000)
+
+            body_text = await page.text_content("body") or ""
+
+            # --- Detectar CAPTCHA ---
+            if "captcha" in body_text.lower() or await page.query_selector("[id*=captcha]"):
+                result = BookingResult(status="CAPTCHA")
+
+            # --- Detectar no disponibilidad ---
+            elif "no tenemos disponibilidad" in body_text.lower():
+                result = BookingResult(status="OCCUPIED")
+
+            # --- Extraer precios de la tabla ---
             else:
-                result = BookingResult(status="ERROR")
-                error = "El agente no devolvió resultado"
+                price_spans = await page.query_selector_all(
+                    "#hprt-table span.prco-valign-middle-helper"
+                )
+                prices: list[str] = []
+                for span in price_spans:
+                    text = (await span.text_content() or "").strip()
+                    if text:
+                        prices.append(text)
 
-        # Guardar último screenshot como evidencia
-        shots = history.screenshots()
-        if shots:
-            last_shot = [s for s in shots if s is not None]
-            if last_shot:
-                img_path = EVIDENCIAS_DIR / f"audit_{ts}.png"
-                img_path.write_bytes(base64.b64decode(last_shot[-1]))
-                screenshot_path = str(img_path)
+                if prices:
+                    # Detectar moneda del primer precio
+                    first = prices[0]
+                    if "ARS" in first or "$" in first:
+                        currency = "ARS"
+                    elif "USD" in first or "US$" in first:
+                        currency = "USD"
+                    else:
+                        currency = "ARS"
 
-    except Exception as exc:
-        result = BookingResult(status="ERROR")
-        error = f"{type(exc).__name__}: {exc}"
-    finally:
-        await browser.close()
+                    # Precio más bajo
+                    min_price = min(prices, key=_parse_price)
+                    result = BookingResult(
+                        status="AVAILABLE",
+                        price_text=min_price,
+                        currency=currency,
+                    )
+                else:
+                    result = BookingResult(status="ERROR")
+                    error = "Tabla de precios no encontrada o vacía"
+
+            # Screenshot como evidencia
+            img_path = EVIDENCIAS_DIR / f"audit_{ts}.png"
+            # Scrollear a la tabla si existe para capturarla
+            table = await page.query_selector("#hprt-table")
+            if table:
+                await table.scroll_into_view_if_needed()
+                await page.wait_for_timeout(500)
+            await page.screenshot(path=str(img_path))
+            screenshot_path = str(img_path)
+
+        except Exception as exc:
+            result = BookingResult(status="ERROR")
+            error = f"{type(exc).__name__}: {exc}"
+        finally:
+            await browser.close()
 
     return {
         "booking_result": result,
         "screenshot_path": screenshot_path,
         "error": error,
     }
+
+
+def _parse_price(text: str) -> float:
+    """Extrae el valor numérico de un string de precio como '$ 142.318'."""
+    digits = re.sub(r"[^\d]", "", text)
+    return float(digits) if digits else float("inf")

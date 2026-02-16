@@ -6,7 +6,7 @@ from pathlib import Path
 ALBARELLOS_URL = "https://www.booking.com/hotel/ar/albarellos-delta.es.html"
 
 # --- LLM ---
-OLLAMA_MODEL = "gemma3:27b"  # El más capaz en tu 3090 24GB
+OLLAMA_MODEL = "gemma3:12b"  # Multimodal (visión), cabe en 24GB VRAM con contexto
 OLLAMA_HOST = "http://localhost:11434"
 
 # --- Browser ---
