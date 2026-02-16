@@ -1,7 +1,8 @@
 """Nodo del grafo: scraper de precios en Booking.com con Playwright directo.
 
-Sin LLM. Navega, espera, parsea HTML con selectores CSS, extrae precios.
-~5 segundos por consulta.
+Sin LLM. Navega, espera, parsea HTML con selectores CSS, extrae precios
+filtrando por capacidad de huéspedes.
+~10 segundos por consulta.
 """
 
 from __future__ import annotations
@@ -12,9 +13,8 @@ from datetime import datetime
 from playwright.async_api import async_playwright
 
 from config import EVIDENCIAS_DIR, HEADLESS
-from state import BookingResult, GraphState
+from state import BookingResult, GraphState, RoomOption
 
-# User-Agent realista para evitar bloqueos básicos
 _UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -23,7 +23,7 @@ _UA = (
 
 
 async def booking_scraper_node(state: GraphState) -> GraphState:
-    """Nodo LangGraph: abre Booking, extrae precio con selectores CSS."""
+    """Nodo LangGraph: abre Booking, extrae precios filtrados por capacidad."""
 
     check_in = state["check_in"]
     check_out = state["check_out"]
@@ -65,46 +65,86 @@ async def booking_scraper_node(state: GraphState) -> GraphState:
             elif "no tenemos disponibilidad" in body_text.lower():
                 result = BookingResult(status="OCCUPIED")
 
-            # --- Extraer precios de la tabla ---
+            # --- Extraer precios por fila con capacidad ---
             else:
-                price_spans = await page.query_selector_all(
-                    "#hprt-table span.prco-valign-middle-helper"
+                rows = await page.query_selector_all(
+                    "#hprt-table tr.js-rt-block-row, #hprt-table tr[data-block-id]"
                 )
-                prices: list[str] = []
-                for span in price_spans:
-                    text = (await span.text_content() or "").strip()
-                    if text:
-                        prices.append(text)
 
-                if prices:
-                    # Detectar moneda del primer precio
-                    first = prices[0]
-                    if "ARS" in first or "$" in first:
-                        currency = "ARS"
-                    elif "USD" in first or "US$" in first:
-                        currency = "USD"
-                    else:
-                        currency = "ARS"
+                all_options: list[RoomOption] = []
 
-                    # Precio más bajo
-                    min_price = min(prices, key=_parse_price)
-                    result = BookingResult(
-                        status="AVAILABLE",
-                        price_text=min_price,
-                        currency=currency,
+                for row in rows:
+                    # Capacidad: contar iconos de persona en la celda de ocupación
+                    person_icons = await row.query_selector_all(
+                        ".hprt-occupancy-occupancy-info svg, "
+                        ".hprt-occupancy-occupancy-info i"
                     )
+                    guests_max = len(person_icons) if person_icons else 0
+
+                    # Si no hay iconos, intentar parsear texto "Máximo de personas: N"
+                    if guests_max == 0:
+                        occ_cell = await row.query_selector("td.hprt-table-cell-occupancy")
+                        if occ_cell:
+                            occ_text = await occ_cell.text_content() or ""
+                            m = re.search(r"(\d+)", occ_text)
+                            if m:
+                                guests_max = int(m.group(1))
+
+                    # Precio
+                    price_span = await row.query_selector("span.prco-valign-middle-helper")
+                    if not price_span:
+                        continue
+                    price_text = (await price_span.text_content() or "").strip()
+                    if not price_text:
+                        continue
+
+                    price_value = _parse_price(price_text)
+
+                    all_options.append(RoomOption(
+                        guests_max=guests_max,
+                        price_text=price_text,
+                        price_value=price_value,
+                    ))
+
+                if all_options:
+                    # Filtrar opciones que cumplen la capacidad solicitada
+                    matched = [o for o in all_options if o.guests_max >= guests]
+
+                    # Detectar moneda
+                    first = all_options[0].price_text
+                    currency = "USD" if ("USD" in first or "US$" in first) else "ARS"
+
+                    if matched:
+                        best = min(matched, key=lambda o: o.price_value)
+                        result = BookingResult(
+                            status="AVAILABLE",
+                            best_price=best.price_text,
+                            currency=currency,
+                            all_options=all_options,
+                            matched_options=matched,
+                        )
+                    else:
+                        # Hay opciones pero ninguna para esa cantidad de personas
+                        best_any = min(all_options, key=lambda o: o.price_value)
+                        result = BookingResult(
+                            status="AVAILABLE",
+                            best_price=best_any.price_text,
+                            currency=currency,
+                            all_options=all_options,
+                            matched_options=[],
+                        )
+                        error = (
+                            f"No hay opciones para {guests} personas. "
+                            f"Máximo disponible: {max(o.guests_max for o in all_options)}. "
+                            f"Mostrando mejor precio general."
+                        )
                 else:
                     result = BookingResult(status="ERROR")
                     error = "Tabla de precios no encontrada o vacía"
 
-            # Screenshot como evidencia
+            # Screenshot como evidencia (sin scroll para capturar precio visible)
             img_path = EVIDENCIAS_DIR / f"audit_{ts}.png"
-            # Scrollear a la tabla si existe para capturarla
-            table = await page.query_selector("#hprt-table")
-            if table:
-                await table.scroll_into_view_if_needed()
-                await page.wait_for_timeout(500)
-            await page.screenshot(path=str(img_path))
+            await page.screenshot(path=str(img_path), full_page=True)
             screenshot_path = str(img_path)
 
         except Exception as exc:
@@ -120,7 +160,7 @@ async def booking_scraper_node(state: GraphState) -> GraphState:
     }
 
 
-def _parse_price(text: str) -> float:
+def _parse_price(text: str) -> int:
     """Extrae el valor numérico de un string de precio como '$ 142.318'."""
     digits = re.sub(r"[^\d]", "", text)
-    return float(digits) if digits else float("inf")
+    return int(digits) if digits else 0

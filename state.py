@@ -7,16 +7,30 @@ from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
 
+class RoomOption(BaseModel):
+    """Una opción de habitación con su precio y capacidad."""
+
+    guests_max: int = Field(description="Capacidad máxima de huéspedes")
+    price_text: str = Field(description="Precio tal como aparece en pantalla")
+    price_value: int = Field(description="Precio numérico sin decimales")
+
+
 class BookingResult(BaseModel):
-    """Resultado estructurado que el LLM debe devolver."""
+    """Resultado estructurado de la consulta a Booking."""
 
     status: Literal["AVAILABLE", "OCCUPIED", "CAPTCHA", "ERROR"] = Field(
         description="Estado de disponibilidad del hotel"
     )
-    price_text: str | None = Field(
-        default=None, description="Texto del precio tal como aparece en pantalla"
+    best_price: str | None = Field(
+        default=None, description="Mejor precio para la cantidad de huéspedes solicitada"
     )
     currency: str = Field(default="ARS", description="Moneda del precio")
+    all_options: list[RoomOption] = Field(
+        default_factory=list, description="Todas las opciones disponibles"
+    )
+    matched_options: list[RoomOption] = Field(
+        default_factory=list, description="Opciones que cumplen la capacidad solicitada"
+    )
 
 
 class GraphState(TypedDict, total=False):

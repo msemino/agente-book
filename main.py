@@ -53,9 +53,19 @@ async def run(check_in: str, check_out: str, guests: int) -> None:
     if result.get("error"):
         print(f"[!] Error: {result['error']}")
 
-    if result.get("booking_result"):
-        print("[+] Resultado:")
-        print(json.dumps(result["booking_result"].model_dump(), indent=2, ensure_ascii=False))
+    br = result.get("booking_result")
+    if br:
+        print(f"[+] Status: {br.status}")
+        if br.best_price:
+            print(f"[+] Mejor precio para {guests} personas: {br.best_price} {br.currency}")
+        if br.matched_options:
+            print(f"[+] Opciones para {guests}+ personas:")
+            for opt in br.matched_options:
+                print(f"      {opt.guests_max} pers. -> {opt.price_text}")
+        if br.all_options and len(br.all_options) != len(br.matched_options):
+            print(f"[*] Todas las opciones:")
+            for opt in br.all_options:
+                print(f"      {opt.guests_max} pers. -> {opt.price_text}")
 
     if result.get("screenshot_path"):
         print(f"[+] Screenshot: {result['screenshot_path']}")
