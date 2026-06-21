@@ -44,8 +44,8 @@ flowchart LR
 
     SG --> OUT([📤 BookingResult + screenshot]):::io
 
-    classDef io fill:#1f2937,stroke:#60a5fa,color:#e5e7eb,rx:6,ry:6;
-    classDef node fill:#0f3d3e,stroke:#2dd4bf,color:#e5e7eb,rx:6,ry:6;
+    classDef io fill:#1f2937,stroke:#60a5fa,color:#e5e7eb;
+    classDef node fill:#0f3d3e,stroke:#2dd4bf,color:#e5e7eb;
     classDef se fill:#374151,stroke:#9ca3af,color:#e5e7eb;
 ```
 
@@ -95,8 +95,8 @@ flowchart TD
     N --> ST["state.py<br/><i>GraphState · BookingResult · RoomOption</i>"]:::f
     M -.reads.-> CF["config.py<br/><i>URL · headless · paths</i>"]:::cfg
 
-    classDef f fill:#1e293b,stroke:#38bdf8,color:#e2e8f0,rx:6,ry:6;
-    classDef cfg fill:#312e81,stroke:#818cf8,color:#e0e7ff,rx:6,ry:6;
+    classDef f fill:#1e293b,stroke:#38bdf8,color:#e2e8f0;
+    classDef cfg fill:#312e81,stroke:#818cf8,color:#e0e7ff;
 ```
 
 **Data flow:**
