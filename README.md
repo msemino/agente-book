@@ -1,255 +1,199 @@
-# Agente-Book — Booking Price Auditor
+<div align="center">
 
-> **Scraper inteligente de precios y disponibilidad en Booking.com** con grafo extensible LangGraph, filtrado por capacidad de huespedes y evidencia visual via Playwright.
+# 🏨 Agente-Book
 
-[![Python](https://img.shields.io/badge/Python-3.11+-blue?logo=python&logoColor=white)](https://python.org)
-[![Playwright](https://img.shields.io/badge/Playwright-1.58-2EAD33?logo=playwright&logoColor=white)](https://playwright.dev)
-[![LangGraph](https://img.shields.io/badge/LangGraph-1.0-orange?logo=langchain&logoColor=white)](https://github.com/langchain-ai/langgraph)
-[![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
+### Booking.com Price Auditor — a deterministic LangGraph agent
 
----
+**Extracts the *correct* price for a given party size, classifies availability, and saves visual proof — in ~10 s, fully local, $0 API cost.**
 
-## Table of Contents
+[![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)](https://python.org)
+[![Playwright](https://img.shields.io/badge/Playwright-1.48+-2EAD33?logo=playwright&logoColor=white)](https://playwright.dev)
+[![LangGraph](https://img.shields.io/badge/LangGraph-0.4+-1C3C3C?logo=langchain&logoColor=white)](https://github.com/langchain-ai/langgraph)
+[![Pydantic](https://img.shields.io/badge/Pydantic-2.x-E92063?logo=pydantic&logoColor=white)](https://docs.pydantic.dev)
+[![License](https://img.shields.io/badge/License-MIT-3DA639)](LICENSE)
 
-- [Overview](#overview)
-- [How It Works](#how-it-works)
-- [Key Features](#key-features)
-- [Architecture](#architecture)
-- [Tech Stack](#tech-stack)
-- [Getting Started](#getting-started)
-- [Usage](#usage)
-- [Output Examples](#output-examples)
-- [Project Structure](#project-structure)
-- [Extending the Graph](#extending-the-graph)
-- [Agent-Lightning Integration](#agent-lightning-integration)
-- [Evolution Log](#evolution-log)
-- [Credits](#credits)
+**English** · [Español](README.es.md)
+
+</div>
 
 ---
 
-## Overview
+## Why this exists
 
-Agente-Book es un modulo de consulta de precios para Booking.com, diseñado como nodo de un grafo LangGraph extensible. Consulta un hotel target, extrae todos los precios disponibles filtrados por capacidad de huespedes, detecta estados (disponible, ocupado, CAPTCHA) y guarda screenshots como evidencia.
+Independent hotels live and die by their pricing relative to the competition, but Booking.com gives owners **no easy way to monitor a rival's live rates** for a specific date and party size. Doing it by hand means opening the site, picking dates, counting how many guests each room sleeps, and reading the price off the table — every single day.
 
-**Target actual:** [Albarellos Delta, Tigre](https://www.booking.com/hotel/ar/albarellos-delta.es.html) (configurable en `config.py`).
+Agente-Book automates that audit. Point it at any Booking.com property and it returns a structured result you can act on: the best price **for the requested number of guests** (not the misleading "from $X" headline), every available room option, the availability status, and a timestamped screenshot as proof.
 
-**Tiempo de consulta:** ~10 segundos por ejecucion.
+It started as an LLM browser-agent and was deliberately re-engineered into a deterministic scraper after the LLM version proved too slow and unreliable — see the [Engineering Log](#-engineering-log). **That decision is the point of the project: knowing when *not* to use an LLM.**
+
+> **Reference target:** [Albarellos Delta, Tigre](https://www.booking.com/hotel/ar/albarellos-delta.es.html) — any property URL works, set it in `config.py`.
 
 ---
 
-## How It Works
+## 🧭 How It Works
 
-```
-  Input (fecha, huespedes)
-          |
-          v
-  ┌───────────────────────────┐
-  │      LangGraph Engine     │
-  │                           │
-  │   START                   │
-  │     |                     │
-  │     v                     │
-  │  ┌─────────────────────┐  │
-  │  │  booking_scraper    │  │   Playwright: navega a Booking.com
-  │  │                     │  │   CSS Selectors: extrae precios por fila
-  │  │  1. Abrir URL       │  │   Filtra por capacidad >= guests
-  │  │  2. Detectar estado │  │   Screenshot full-page como evidencia
-  │  │  3. Parsear tabla   │  │
-  │  │  4. Filtrar precios │  │
-  │  └─────────────────────┘  │
-  │     |                     │
-  │     v                     │
-  │    END                    │
-  │                           │
-  └───────────────────────────┘
-          |
-          v
-  Output (BookingResult + screenshot)
+```mermaid
+flowchart LR
+    IN([📥 check-in · check-out · guests]):::io --> SG
+
+    subgraph SG [LangGraph StateGraph]
+        direction TB
+        S((START)):::se --> BS["🌐 booking_scraper<br/>Playwright + CSS selectors"]:::node
+        BS --> E((END)):::se
+    end
+
+    SG --> OUT([📤 BookingResult + screenshot]):::io
+
+    classDef io fill:#1f2937,stroke:#60a5fa,color:#e5e7eb,rx:6,ry:6;
+    classDef node fill:#0f3d3e,stroke:#2dd4bf,color:#e5e7eb,rx:6,ry:6;
+    classDef se fill:#374151,stroke:#9ca3af,color:#e5e7eb;
 ```
 
-**Flujo de deteccion:**
+The orchestration is a LangGraph `StateGraph`. Today it's a single node, but the graph is the architecture: alerts, multi-hotel comparison, and price history each drop in as new nodes without touching the existing one.
 
-1. Navega a la URL del hotel con fechas y huespedes inyectados
-2. Espera carga completa (6s)
-3. Detecta CAPTCHA → status `CAPTCHA`
-4. Detecta "No tenemos disponibilidad" → status `OCCUPIED`
-5. Extrae tabla `#hprt-table`:
-   - Por cada fila: cuenta iconos de persona (capacidad) + extrae precio
-   - Filtra opciones donde capacidad >= huespedes solicitados
-   - Selecciona el precio mas bajo del subset filtrado
-6. Screenshot full-page + resultado estructurado Pydantic
+### Detection logic
+
+```mermaid
+flowchart TD
+    A[Navigate to property URL<br/>dates + guests injected] --> B{CAPTCHA<br/>detected?}
+    B -- yes --> C[["🟡 status: CAPTCHA"]]:::warn
+    B -- no --> D{No availability<br/>copy present?}
+    D -- yes --> E[["🔴 status: OCCUPIED"]]:::bad
+    D -- no --> F[Parse #hprt-table rows]
+    F --> G[Count occupancy icons<br/>= room capacity]
+    G --> H[Keep rows where<br/>capacity ≥ requested guests]
+    H --> I[Pick lowest price<br/>in the matched subset]
+    I --> J[["🟢 status: AVAILABLE<br/>+ full-page screenshot"]]:::good
+
+    classDef good fill:#064e3b,stroke:#34d399,color:#ecfdf5;
+    classDef warn fill:#78350f,stroke:#fbbf24,color:#fffbeb;
+    classDef bad fill:#7f1d1d,stroke:#f87171,color:#fef2f2;
+```
 
 ---
 
-## Key Features
+## ✨ Key Features
 
 | Feature | Description |
 |---------|-------------|
-| **Filtrado por capacidad** | Extrae precio correcto segun cantidad de huespedes (no el minimo global) |
-| **Deteccion de estados** | AVAILABLE, OCCUPIED, CAPTCHA, ERROR con logica determinista |
-| **Evidencia visual** | Screenshot full-page guardado en `evidencias/` con timestamp |
-| **Grafo extensible** | LangGraph StateGraph: agregar nuevos nodos sin tocar el existente |
-| **Todas las opciones** | Devuelve `all_options` y `matched_options` con desglose completo |
-| **Zero LLM** | Playwright directo con CSS selectors. Sin API keys, sin VRAM, sin costo |
-| **~10 seg/consulta** | vs ~10 min con LLM agent (v1 usaba browser-use + ChatOllama) |
+| 🎯 **Capacity-aware pricing** | Returns the correct price for the requested party size — not the global minimum that sleeps fewer people |
+| 🚦 **State detection** | `AVAILABLE`, `OCCUPIED`, `CAPTCHA`, `ERROR` with deterministic logic |
+| 📸 **Visual evidence** | Timestamped full-page screenshot saved for every run |
+| 🧩 **Extensible graph** | LangGraph `StateGraph`: add nodes (alerts, multi-hotel compare, history) without touching existing code |
+| 📊 **Full option breakdown** | Returns both `all_options` and `matched_options` as structured Pydantic data |
+| 💸 **Zero LLM, zero cost** | Direct Playwright + CSS selectors. No API keys, no VRAM, no per-query cost |
+| ⚡ **~10 s/query** | vs ~10 min with the original LLM-agent version (see Engineering Log) |
 
 ---
 
-## Architecture
+## 🏗️ Architecture
 
-```
-agente-book/
-│
-├── main.py                 Entry point + CLI
-│     |
-│     v
-├── graph.py                LangGraph StateGraph (compile + visualize)
-│     |
-│     v
-├── nodes/
-│   └── booking_scraper.py  Playwright scraper node
-│         |
-│         v
-├── state.py                GraphState (TypedDict) + BookingResult + RoomOption (Pydantic)
-│
-├── config.py               URLs, flags, paths
-└── evidencias/             Screenshots con timestamp (gitignored)
+```mermaid
+flowchart TD
+    M["main.py<br/><i>CLI · output formatting</i>"]:::f --> G["graph.py<br/><i>StateGraph builder</i>"]:::f
+    G --> N["nodes/booking_scraper.py<br/><i>navigate · parse · filter</i>"]:::f
+    N --> ST["state.py<br/><i>GraphState · BookingResult · RoomOption</i>"]:::f
+    M -.reads.-> CF["config.py<br/><i>URL · headless · paths</i>"]:::cfg
+
+    classDef f fill:#1e293b,stroke:#38bdf8,color:#e2e8f0,rx:6,ry:6;
+    classDef cfg fill:#312e81,stroke:#818cf8,color:#e0e7ff,rx:6,ry:6;
 ```
 
-**Flujo de datos:**
+**Data flow:**
 
-```
-GraphState {                        BookingResult {
-  check_in: "07/03/2026"              status: "AVAILABLE"
-  check_out: "08/03/2026"   ──>       best_price: "$ 167.433"
-  guests: 4                           currency: "ARS"
-  hotel_url: "..."                     all_options: [8 RoomOption]
-}                                      matched_options: [2 RoomOption]
-                                    }
+```mermaid
+flowchart LR
+    subgraph IN [GraphState · input]
+        a["check_in: 07/03/2026<br/>check_out: 08/03/2026<br/>guests: 4<br/>hotel_url: ..."]
+    end
+    subgraph OUT [BookingResult · output]
+        b["status: AVAILABLE<br/>best_price: $ 167.433<br/>currency: ARS<br/>all_options: 8<br/>matched_options: 2"]
+    end
+    IN ==> OUT
 ```
 
 ---
 
-## Tech Stack
+## 🛠️ Tech Stack
 
 | Layer | Technology | Purpose |
 |-------|-----------|---------|
-| **Scraping** | Playwright 1.58 | Browser automation, navegacion, screenshots |
-| **Orchestration** | LangGraph 1.0 | Grafo de estados, extensibilidad multi-agente |
-| **Data Models** | Pydantic 2.x | Validacion y serializacion de resultados |
-| **Parsing** | CSS Selectors + Regex | Extraccion de precios y capacidad del DOM |
-| **Runtime** | Python 3.11+ | Async/await nativo |
+| **Scraping** | Playwright | Browser automation, navigation, screenshots |
+| **Orchestration** | LangGraph | State graph, multi-node extensibility |
+| **Data models** | Pydantic 2.x | Validation & serialization of results |
+| **Parsing** | CSS selectors + regex | Price/capacity extraction from the DOM |
+| **Runtime** | Python 3.11+ | Native async/await |
 
 ---
 
-## Getting Started
-
-### Prerequisites
-
-- **Python 3.11+** — [python.org](https://python.org) (3.14 testeado y funcional)
-- **Playwright Chromium** — se instala automaticamente
-
-### Installation
+## 🚀 Getting Started
 
 ```bash
-# Clonar el repositorio
 git clone https://github.com/msemino/agente-book.git
 cd agente-book
 
-# Instalar dependencias
 pip install -r requirements.txt
-
-# Instalar browser de Playwright
 python -m playwright install chromium
 ```
 
-### Configuration
-
-Editar `config.py` para cambiar el hotel target:
+Edit `config.py` to point at any property:
 
 ```python
-# Hotel target
 ALBARELLOS_URL = "https://www.booking.com/hotel/ar/albarellos-delta.es.html"
-
-# Browser
-HEADLESS = False   # False para ver el browser, True para produccion
+HEADLESS = False   # False to watch the browser, True for production
 ```
 
-No se necesitan API keys ni `.env` — todo corre local.
+No API keys or `.env` required — everything runs locally.
 
 ---
 
-## Usage
-
-### Consulta basica (fechas por defecto: mañana)
+## ▶️ Usage
 
 ```bash
+# Default dates (tomorrow → day after), 2 guests
 python main.py
-```
 
-### Consulta con fechas y huespedes especificos
-
-```bash
+# Specific dates and party size
 python main.py --checkin 07/03/2026 --checkout 08/03/2026 --guests 4
-```
 
-### Solo generar imagen del grafo
-
-```bash
+# Only render the LangGraph diagram
 python main.py --graph
 ```
 
-### Parametros CLI
-
-| Parametro | Default | Descripcion |
-|-----------|---------|-------------|
-| `--checkin` | mañana | Fecha check-in (dd/mm/yyyy) |
-| `--checkout` | pasado mañana | Fecha check-out (dd/mm/yyyy) |
-| `--guests` | 2 | Cantidad de huespedes |
-| `--graph` | - | Solo genera imagen del grafo LangGraph |
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--checkin` | tomorrow | Check-in date (dd/mm/yyyy) |
+| `--checkout` | day after | Check-out date (dd/mm/yyyy) |
+| `--guests` | 2 | Number of guests |
+| `--graph` | – | Render the LangGraph diagram and exit |
 
 ---
 
-## Output Examples
+## 📤 Output Examples
 
-### Disponible — 4 personas
+> Representative run (Albarellos Delta, Feb 2026). Live prices vary.
 
 ```
-[*] Consultando Albarellos Delta...
+[*] Querying Albarellos Delta...
     Check-in:  07/03/2026
     Check-out: 08/03/2026
-    Huespedes: 4
+    Guests:    4
 
 [+] Status: AVAILABLE
-[+] Mejor precio para 4 personas: $ 167.433 ARS
-[+] Opciones para 4+ personas:
-      4 pers. -> $ 167.433
-      4 pers. -> $ 200.919
-[*] Todas las opciones:
-      4 pers. -> $ 167.433
-      4 pers. -> $ 200.919
-      3 pers. -> $ 159.061
-      3 pers. -> $ 190.873
-      2 pers. -> $ 150.690
-      2 pers. -> $ 180.827
-      1 pers. -> $ 142.318
-      1 pers. -> $ 170.782
-[+] Screenshot: D:\tech-lab\agente-book\evidencias\audit_20260216_090609.png
+[+] Best price for 4 guests: $ 167.433 ARS
+[+] Options for 4+ guests:
+      4 guests -> $ 167.433
+      4 guests -> $ 200.919
+[*] All options:
+      4 guests -> $ 167.433
+      3 guests -> $ 159.061
+      2 guests -> $ 150.690
+      1 guest  -> $ 142.318
+[+] Screenshot: evidencias/audit_20260216_090609.png
 ```
 
-### Ocupado
-
-```
-[*] Consultando Albarellos Delta...
-    Check-in:  16/02/2026
-    Check-out: 17/02/2026
-    Huespedes: 2
-
-[+] Status: OCCUPIED
-[+] Screenshot: D:\tech-lab\agente-book\evidencias\audit_20260215_214333.png
-```
-
-### Resultado JSON (BookingResult)
+<details>
+<summary><b>Structured result (<code>BookingResult</code> JSON)</b></summary>
 
 ```json
 {
@@ -270,137 +214,70 @@ python main.py --graph
 }
 ```
 
----
-
-## Project Structure
-
-```
-agente-book/
-├── main.py                 # Entry point, CLI args, output formatting
-├── graph.py                # LangGraph StateGraph builder + Mermaid export
-├── state.py                # GraphState, BookingResult, RoomOption (Pydantic)
-├── config.py               # Hotel URL, headless flag, paths
-├── nodes/
-│   ├── __init__.py         # Re-export de nodos
-│   └── booking_scraper.py  # Playwright scraper: navegar, parsear, filtrar
-├── evidencias/             # Screenshots con timestamp (gitignored)
-├── requirements.txt        # browser-use, langgraph, pydantic
-├── .gitignore
-└── .env.example
-```
+</details>
 
 ---
 
-## Extending the Graph
+## 🧩 Extending the Graph
 
-El grafo actual es lineal (`START -> booking_scraper -> END`). Para agregar nodos:
+The graph is linear today (`START → booking_scraper → END`). Adding a node is three steps:
 
-### 1. Crear un nuevo nodo en `nodes/`
+**1. Create the node in `nodes/`:**
 
 ```python
 # nodes/price_alert.py
 from state import GraphState
 
 async def price_alert_node(state: GraphState) -> GraphState:
-    """Envia alerta si el precio baja de un umbral."""
+    """Fire an alert when the matched price drops below a threshold."""
     br = state.get("booking_result")
     if br and br.matched_options:
         best = min(br.matched_options, key=lambda o: o.price_value)
         if best.price_value < 150000:
-            # Enviar notificacion...
-            pass
+            ...  # notify
     return state
 ```
 
-### 2. Conectarlo en `graph.py`
+**2. Wire it in `graph.py`:**
 
 ```python
-from nodes.price_alert import price_alert_node
-
 builder.add_node("price_alert", price_alert_node)
 builder.add_edge("booking_scraper", "price_alert")
 builder.add_edge("price_alert", END)
 ```
 
-### 3. Agregar campos al estado si es necesario en `state.py`
+**3. Add any new fields to `GraphState` in `state.py`.**
 
-```python
-class GraphState(TypedDict, total=False):
-    # ... campos existentes ...
-    alert_sent: bool  # nuevo campo
-```
-
-### Ideas de nodos futuros
-
-| Nodo | Funcion |
-|------|---------|
-| `price_comparator` | Comparar precios entre multiples hoteles |
-| `price_history` | Guardar historico en SQLite y detectar tendencias |
-| `alert_telegram` | Notificar por Telegram cuando hay disponibilidad |
-| `multi_date_scan` | Escanear un rango de fechas en paralelo |
-| `captcha_handler` | Pausar y esperar intervencion manual en CAPTCHA |
+| Candidate node | Function |
+|------|----------|
+| `price_comparator` | Compare live rates across competing hotels |
+| `price_history` | Persist to SQLite and detect trends over time |
+| `alert_telegram` | Push a notification on availability or price drop |
+| `multi_date_scan` | Scan a date range in parallel |
 
 ---
 
-## Agent-Lightning Integration
+## 🧠 Engineering Log
 
-Este proyecto esta preparado para integrarse con [Microsoft Agent-Lightning](https://github.com/microsoft/agent-lightning) cuando se necesite optimizar agentes con RL o fine-tuning.
+The most useful part of this project is the decision to **drop the LLM**:
 
-### Que es Agent-Lightning
+| Version | Change | Result |
+|---------|--------|--------|
+| **v1.0** | `browser-use` + `ChatOllama` (gemma3:27b) | OOM on RTX 3090 (27b + vision > 24 GB VRAM) |
+| **v1.1** | Switched to gemma3:12b | Worked, but ~10 min/query and prone to looping |
+| **v2.0** | Direct Playwright, no LLM | ~10 s/query, deterministic, 0 VRAM |
+| **v2.1** | Capacity filtering + full-page screenshot | Correct price per party size, complete evidence |
 
-Framework de entrenamiento de agentes AI usando:
-- **APO** (Automatic Prompt Optimization) — optimiza prompts con gradientes textuales
-- **VERL** (Reinforcement Learning) — entrena agentes con GRPO
-- **SFT** (Supervised Fine-tuning) — fine-tuning con Azure OpenAI, Unsloth, etc.
-
-### Por que es relevante
-
-Agent-Lightning tiene **soporte nativo para LangGraph** (que es lo que usamos). Los examples relevantes:
-
-| Example | Relevancia |
-|---------|-----------|
-| [`spider`](https://github.com/microsoft/agent-lightning/tree/main/examples/spider) | LangGraph + RL para agente de Text-to-SQL. Mismo patron de grafo que usamos |
-| [`chartqa`](https://github.com/microsoft/agent-lightning/tree/main/examples/chartqa) | LangGraph + vision para razonamiento multi-paso sobre datos visuales |
-| [`rag`](https://github.com/microsoft/agent-lightning/tree/main/examples/rag) | Pipeline de retrieval que se puede adaptar para historico de precios |
-| [`apo`](https://github.com/microsoft/agent-lightning/tree/main/examples/apo) | Optimizacion automatica de prompts (util si se vuelve a usar LLM) |
-
-### Cuando usarlo
-
-Si en el futuro se reintroduce un LLM en el grafo (por ejemplo un nodo de analisis de tendencias o decision de compra), Agent-Lightning permitiria:
-
-1. **Instrumentar el grafo** con su tracer (AgentOps o OpenTelemetry)
-2. **Registrar ejecuciones** como traces de entrenamiento
-3. **Optimizar prompts** del nodo LLM con APO
-4. **Fine-tunear** el modelo local con RL usando las ejecuciones reales como datos
-
-```python
-# Ejemplo futuro de instrumentacion
-from agentlightning import AgentOpsTracer
-
-tracer = AgentOpsTracer()
-# El grafo LangGraph se instrumenta automaticamente
-result = await graph.ainvoke(state)
-tracer.record_reward(result)  # feedback para RL
-```
+> **Takeaway:** an LLM agent was the wrong tool for a structured, repeatable extraction task. A deterministic scraper is ~60× faster, free to run, and 100% reproducible. LangGraph stays because the *orchestration* value — composable nodes for alerts, comparison, history — is real even without an LLM in the loop.
 
 ---
 
-## Evolution Log
+## 🗺️ Roadmap
 
-| Version | Cambio | Resultado |
-|---------|--------|-----------|
-| **v1.0** | browser-use + ChatOllama (gemma3:27b) | OOM en RTX 3090 (27b + vision = 24GB+) |
-| **v1.1** | Switch a gemma3:12b | Funciono pero 10 min/consulta, se perdia en loops |
-| **v2.0** | Playwright directo, sin LLM | 10 seg/consulta, 100% confiable, 0 VRAM |
-| **v2.1** | Filtrado por capacidad de huespedes | Precio correcto por cantidad de personas |
-| **v2.1** | Screenshot full-page sin scroll | Captura completa, precio visible |
+The graph is designed so an LLM can be reintroduced **only where it adds value** — e.g. a reasoning node for buy/no-buy decisions or trend analysis over price history. At that point the structured run traces become training data, and the LangGraph topology is directly compatible with RL / prompt-optimization tooling such as [Microsoft Agent-Lightning](https://github.com/microsoft/agent-lightning) (native LangGraph support: APO + RL + SFT).
 
 ---
 
-## Credits
-
-- **Playwright** — [playwright.dev](https://playwright.dev) — Browser automation
-- **LangGraph** — [langchain-ai/langgraph](https://github.com/langchain-ai/langgraph) — State graph orchestration
-- **Pydantic** — [pydantic.dev](https://docs.pydantic.dev) — Data validation
-- **Agent-Lightning** — [microsoft/agent-lightning](https://github.com/microsoft/agent-lightning) — Future RL/APO training integration
-- **Built with** Claude Code (Opus 4.6) + RTX 3090 Tech Lab
+<div align="center">
+<sub>Built in the RTX 3090 home AI lab · Authored with the help of Claude Code</sub>
+</div>

@@ -80,7 +80,7 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.graph:
-        path = get_graph_image("D:/tech-lab/agente-book/graph.png")
+        path = get_graph_image("graph.png")
         print(f"[+] Grafo generado: {path}")
         return
 
