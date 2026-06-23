@@ -26,7 +26,7 @@ Agente-Book automates that audit. Point it at any Booking.com property and it re
 
 It started as an LLM browser-agent and was deliberately re-engineered into a deterministic scraper after the LLM version proved too slow and unreliable — see the [Engineering Log](#-engineering-log). **That decision is the point of the project: knowing when *not* to use an LLM.**
 
-> **Reference target:** [Albarellos Delta, Tigre](https://www.booking.com/hotel/ar/albarellos-delta.es.html) — any property URL works, set it in `config.py`.
+> **Target property:** any Booking.com property URL works — set it in `config.py`.
 
 ---
 
@@ -139,7 +139,7 @@ python -m playwright install chromium
 Edit `config.py` to point at any property:
 
 ```python
-ALBARELLOS_URL = "https://www.booking.com/hotel/ar/albarellos-delta.es.html"
+HOTEL_URL = "https://www.booking.com/hotel/ar/example-hotel.es.html"
 HEADLESS = False   # False to watch the browser, True for production
 ```
 
@@ -171,10 +171,10 @@ python main.py --graph
 
 ## 📤 Output Examples
 
-> Representative run (Albarellos Delta, Feb 2026). Live prices vary.
+> Representative run (example property, Feb 2026). Live prices vary.
 
 ```
-[*] Querying Albarellos Delta...
+[*] Querying target property...
     Check-in:  07/03/2026
     Check-out: 08/03/2026
     Guests:    4

@@ -3,7 +3,8 @@
 from pathlib import Path
 
 # --- Hotel target ---
-ALBARELLOS_URL = "https://www.booking.com/hotel/ar/albarellos-delta.es.html"
+# Set this to the Booking.com URL of the property you want to audit.
+HOTEL_URL = "https://www.booking.com/hotel/ar/example-hotel.es.html"
 
 # --- Browser ---
 HEADLESS = False  # False para ver el browser, True para produccion

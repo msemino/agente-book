@@ -21,7 +21,7 @@ if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-from config import ALBARELLOS_URL
+from config import HOTEL_URL
 from graph import build_graph, get_graph_image
 
 
@@ -39,10 +39,10 @@ async def run(check_in: str, check_out: str, guests: int) -> None:
         "check_in": check_in,
         "check_out": check_out,
         "guests": guests,
-        "hotel_url": ALBARELLOS_URL,
+        "hotel_url": HOTEL_URL,
     }
 
-    print(f"[*] Consultando Albarellos Delta...")
+    print(f"[*] Consultando propiedad target...")
     print(f"    Check-in:  {check_in}")
     print(f"    Check-out: {check_out}")
     print(f"    Huéspedes: {guests}")

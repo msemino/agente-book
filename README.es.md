@@ -26,7 +26,7 @@ Agente-Book automatiza esa auditoría. Apuntalo a cualquier propiedad de Booking
 
 Empezó como un agente LLM de navegación y fue **re-diseñado deliberadamente** como scraper determinista cuando la versión con LLM resultó demasiado lenta e inestable — ver el [Registro de ingeniería](#-registro-de-ingeniería). **Esa decisión es el punto del proyecto: saber cuándo *no* usar un LLM.**
 
-> **Objetivo de referencia:** [Albarellos Delta, Tigre](https://www.booking.com/hotel/ar/albarellos-delta.es.html) — funciona con cualquier URL de propiedad, se configura en `config.py`.
+> **Propiedad objetivo:** funciona con cualquier URL de propiedad de Booking.com — se configura en `config.py`.
 
 ---
 
@@ -139,7 +139,7 @@ python -m playwright install chromium
 Editar `config.py` para apuntar a cualquier propiedad:
 
 ```python
-ALBARELLOS_URL = "https://www.booking.com/hotel/ar/albarellos-delta.es.html"
+HOTEL_URL = "https://www.booking.com/hotel/ar/example-hotel.es.html"
 HEADLESS = False   # False para ver el browser, True para producción
 ```
 
@@ -171,10 +171,10 @@ python main.py --graph
 
 ## 📤 Ejemplos de salida
 
-> Corrida representativa (Albarellos Delta, feb. 2026). Los precios en vivo varían.
+> Corrida representativa (propiedad de ejemplo, feb. 2026). Los precios en vivo varían.
 
 ```
-[*] Querying Albarellos Delta...
+[*] Querying target property...
     Check-in:  07/03/2026
     Check-out: 08/03/2026
     Guests:    4
