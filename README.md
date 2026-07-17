@@ -263,7 +263,7 @@ The most useful part of this project is the decision to **drop the LLM**:
 
 | Version | Change | Result |
 |---------|--------|--------|
-| **v1.0** | `browser-use` + `ChatOllama` (gemma3:27b) | OOM on RTX 3090 (27b + vision > 24 GB VRAM) |
+| **v1.0** | `browser-use` + `ChatOllama` (gemma3:27b) | OOM on 24 GB GPU (27b + vision > 24 GB VRAM) |
 | **v1.1** | Switched to gemma3:12b | Worked, but ~10 min/query and prone to looping |
 | **v2.0** | Direct Playwright, no LLM | ~10 s/query, deterministic, 0 VRAM |
 | **v2.1** | Capacity filtering + full-page screenshot | Correct price per party size, complete evidence |
@@ -279,5 +279,5 @@ The graph is designed so an LLM can be reintroduced **only where it adds value**
 ---
 
 <div align="center">
-<sub>Built in the RTX 3090 home AI lab · Authored with the help of Claude Code</sub>
+<sub>Built in the 24 GB GPU home AI lab · Authored with the help of Claude Code</sub>
 </div>

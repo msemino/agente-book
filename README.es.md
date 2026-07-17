@@ -263,7 +263,7 @@ Lo más valioso del proyecto es la decisión de **sacar el LLM**:
 
 | Versión | Cambio | Resultado |
 |---------|--------|--------|
-| **v1.0** | `browser-use` + `ChatOllama` (gemma3:27b) | OOM en RTX 3090 (27b + visión > 24 GB VRAM) |
+| **v1.0** | `browser-use` + `ChatOllama` (gemma3:27b) | OOM en 24 GB GPU (27b + visión > 24 GB VRAM) |
 | **v1.1** | Cambio a gemma3:12b | Funcionó, pero ~10 min/consulta y se perdía en loops |
 | **v2.0** | Playwright directo, sin LLM | ~10 s/consulta, determinista, 0 VRAM |
 | **v2.1** | Filtrado por capacidad + screenshot full-page | Precio correcto por cantidad de personas, evidencia completa |
@@ -279,5 +279,5 @@ El grafo está diseñado para reintroducir un LLM **solo donde aporte valor** �
 ---
 
 <div align="center">
-<sub>Construido en el laboratorio de IA local con RTX 3090 · Escrito con la ayuda de Claude Code</sub>
+<sub>Construido en el laboratorio de IA local con 24 GB GPU · Escrito con la ayuda de Claude Code</sub>
 </div>
